@@ -112,9 +112,9 @@ def main(window_size=10, hop_length=5):
 
     device = torch.device("cpu") # using Mac GPU got me worse results
 
-    train_dataset = AudioDataset("dataset/wwwedaic/labels/train_split.csv", window_size, hop_length)
-    val_dataset = AudioDataset("dataset/wwwedaic/labels/dev_split.csv", window_size, hop_length)
-    test_dataset = AudioDataset("dataset/wwwedaic/labels/test_split.csv", window_size, hop_length)
+    train_dataset = AudioDataset("../dataset/wwwedaic/labels/train_split.csv", window_size, hop_length)
+    val_dataset = AudioDataset("../dataset/wwwedaic/labels/dev_split.csv", window_size, hop_length)
+    test_dataset = AudioDataset("../dataset/wwwedaic/labels/test_split.csv", window_size, hop_length)
 
     combined_dataset = ConcatDataset([train_dataset, val_dataset])
     

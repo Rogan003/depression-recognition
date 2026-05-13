@@ -103,10 +103,10 @@ def run_search(name, estimator, param_dist, X, y, scoring, n_iter=100):
 
 def main():
     print("Loading training data...")
-    X_train, y_train = load_audio_features("dataset/wwwedaic/labels/train_split.csv")
+    X_train, y_train = load_audio_features("../dataset/wwwedaic/labels/train_split.csv")
     
     print("Loading validation data...")
-    X_val, y_val = load_audio_features("dataset/wwwedaic/labels/dev_split.csv")
+    X_val, y_val = load_audio_features("../dataset/wwwedaic/labels/dev_split.csv")
 
     X = np.concatenate([X_train, X_val])
     y = np.concatenate([y_train, y_val])

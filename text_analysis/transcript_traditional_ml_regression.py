@@ -12,8 +12,8 @@ from sklearn.inspection import permutation_importance
 from sklearn.metrics import make_scorer, mean_squared_error, mean_absolute_error
 from scipy.stats import pearsonr, loguniform, uniform
 
-DATA_DIR = 'dataset/wwwedaic/data'
-LABELS_DIR = 'dataset/wwwedaic/labels'
+DATA_DIR = '../dataset/wwwedaic/data'
+LABELS_DIR = '../dataset/wwwedaic/labels'
 
 def load_data(split_file):
     df_split = pd.read_csv(split_file)
@@ -46,7 +46,7 @@ def load_data(split_file):
     return ids, texts, labels
 
 def ensure_media_dir():
-    os.makedirs('media', exist_ok=True)
+    os.makedirs('../media', exist_ok=True)
 
 
 def plot_signed_feature_importance(values, feature_names, model_name, out_path, top_n=20):
@@ -150,7 +150,7 @@ def create_interpretability_plots(best_model_info, all_results, X_test_tfidf, y_
         permutation_values,
         feature_names,
         f"{best_model_info['name']} permutation",
-        'media/tfidf_best_model_permutation_importance.png'
+        '../media/tfidf_best_model_permutation_importance.png'
     )
 
     # Extra signed view when a linear model is available.
@@ -162,7 +162,7 @@ def create_interpretability_plots(best_model_info, all_results, X_test_tfidf, y_
             coef,
             feature_names,
             best_linear['name'],
-            'media/tfidf_best_linear_coefficients.png'
+            '../media/tfidf_best_linear_coefficients.png'
         )
 
     # Optional tree-specific view.
@@ -174,7 +174,7 @@ def create_interpretability_plots(best_model_info, all_results, X_test_tfidf, y_
             tree_values,
             feature_names,
             best_tree['name'],
-            'media/tfidf_best_tree_feature_importance.png'
+            '../media/tfidf_best_tree_feature_importance.png'
         )
 
 def main():
