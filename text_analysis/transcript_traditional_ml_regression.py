@@ -1,196 +1,29 @@
 import os
-import pandas as pd
+
 import numpy as np
-import matplotlib.pyplot as plt
 import nltk
 from nltk.stem import WordNetLemmatizer
 from nltk.tokenize import word_tokenize
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.decomposition import TruncatedSVD
+from sklearn.inspection import permutation_importance
 
-# Download necessary NLTK datasets (only needs to run once)
+import common
+
 nltk.download('punkt', quiet=True)
 nltk.download('wordnet', quiet=True)
 nltk.download('punkt_tab', quiet=True)
 
 lemmatizer = WordNetLemmatizer()
 
+
 def custom_lemma_tokenizer(text):
-    # Tokenize the text into words
     tokens = word_tokenize(text)
-    # Lemmatize each word
     return [lemmatizer.lemmatize(token) for token in tokens]
-
-from sklearn.base import clone
-from sklearn.feature_extraction.text import TfidfVectorizer
-from sklearn.decomposition import TruncatedSVD
-from sklearn.linear_model import Ridge, ElasticNet, BayesianRidge
-from sklearn.neural_network import MLPRegressor
-from sklearn.svm import SVR
-from sklearn.ensemble import RandomForestRegressor, GradientBoostingRegressor
-from sklearn.model_selection import RandomizedSearchCV
-from sklearn.inspection import permutation_importance
-from sklearn.metrics import make_scorer, mean_squared_error, mean_absolute_error
-from scipy.stats import pearsonr, loguniform, uniform
-
-DATA_DIR = '../dataset/wwwedaic/data'
-LABELS_DIR = '../dataset/wwwedaic/labels'
-
-def load_data(split_file):
-    df_split = pd.read_csv(split_file)
-    texts = []
-    labels = []
-    ids = []
-    
-    for _, row in df_split.iterrows():
-        p_id = int(row['Participant_ID'])
-        phq_score = row['PHQ_Score']
-        
-        transcript_path = os.path.join(DATA_DIR, f"{p_id}_P", f"{p_id}_Transcript.csv")
-        if os.path.exists(transcript_path):
-            try:
-                df_trans = pd.read_csv(transcript_path)
-                if 'Text' in df_trans.columns:
-                    text_data = df_trans['Text'].dropna().astype(str).tolist()
-                    text_data = [text.strip().lower() for text in text_data]
-                    full_text = " ".join(text_data)
-                    texts.append(full_text)
-                    labels.append(phq_score)
-                    ids.append(p_id)
-                else:
-                    print(f"Warning: 'Text' column not found in {transcript_path}")
-            except Exception as e:
-                print(f"Error reading {transcript_path}: {e}")
-        else:
-            print(f"Warning: Transcript not found for participant {p_id}")
-            
-    return ids, texts, labels
-
-def ensure_media_dir():
-    os.makedirs('../media', exist_ok=True)
-
-
-def plot_signed_feature_importance(values, feature_names, model_name, out_path, top_n=20):
-    top_positive_idx = np.argsort(values)[-top_n:]
-    top_negative_idx = np.argsort(values)[:top_n]
-    top_idx = np.concatenate([top_negative_idx, top_positive_idx])
-
-    features = [feature_names[i] for i in top_idx]
-    importances = values[top_idx]
-
-    plt.figure(figsize=(12, 10))
-    colors = ['red' if c < 0 else 'blue' for c in importances]
-    plt.barh(range(len(features)), importances, color=colors)
-    plt.yticks(range(len(features)), features)
-    plt.xlabel('Signed coefficient value')
-    plt.title(f'Top influential words/phrases ({model_name}, positive vs negative)')
-    plt.tight_layout()
-    plt.savefig(out_path)
-    plt.close()
-    print(f"Saved signed feature-importance visualization to '{out_path}'")
-
-
-def plot_unsigned_feature_importance(values, feature_names, model_name, out_path, top_n=30):
-    top_idx = np.argsort(values)[-top_n:]
-    features = [feature_names[i] for i in top_idx]
-    importances = values[top_idx]
-
-    plt.figure(figsize=(12, 10))
-    plt.barh(range(len(features)), importances, color='darkgreen')
-    plt.yticks(range(len(features)), features)
-    plt.xlabel('Importance')
-    plt.title(f'Top influential words/phrases ({model_name})')
-    plt.tight_layout()
-    plt.savefig(out_path)
-    plt.close()
-    print(f"Saved feature-importance visualization to '{out_path}'")
-
-def pearson_scorer(y_true, y_pred):
-    if np.std(y_pred) < 1e-9 or np.std(y_true) < 1e-9:
-        return 0.0
-    corr, _ = pearsonr(y_true, y_pred)
-    return corr
-
-
-def run_random_search(model_cfg, X, y, scoring):
-    if model_cfg.get('needs_dense', False) and hasattr(X, 'toarray'):
-        X = X.toarray()
-
-    search = RandomizedSearchCV(
-        estimator=clone(model_cfg['estimator']),
-        param_distributions=model_cfg['param_dist'],
-        n_iter=model_cfg['n_iter'],
-        cv=5,
-        scoring=scoring,
-        refit='MAE',
-        n_jobs=-1,
-        random_state=42
-    )
-    search.fit(X, y)
-
-    best_idx = search.best_index_
-    cv_results = search.cv_results_
-    cv_mae = -cv_results['mean_test_MAE'][best_idx]
-    cv_rmse = -cv_results['mean_test_RMSE'][best_idx]
-    cv_pearson = cv_results['mean_test_Pearson'][best_idx]
-
-    print(f"Best {model_cfg['name']} params: {search.best_params_}")
-    print(f"CV MAE: {cv_mae:.4f}, RMSE: {cv_rmse:.4f}, Pearson: {cv_pearson:.4f}")
-
-    return {
-        'name': model_cfg['name'],
-        'MAE': cv_mae,
-        'RMSE': cv_rmse,
-        'Pearson': cv_pearson,
-        'model': search.best_estimator_,
-        'params': search.best_params_,
-        'needs_dense': model_cfg.get('needs_dense', False)
-    }
-
-
-def model_score_for_picking(model_result):
-    return model_result['MAE'] + model_result['RMSE'] * (3 / 5) - 10 * model_result['Pearson']
-
-
-def plot_predictions(y_true, y_pred, model_name, out_path):
-    y_true = np.asarray(y_true)
-    y_pred = np.asarray(y_pred)
-
-    # Sort samples by the actual PHQ score so the "real" values form a smooth
-    # ascending reference line and the predictions can be compared against it.
-    order = np.argsort(y_true)
-    y_true_sorted = y_true[order]
-    y_pred_sorted = y_pred[order]
-    x = np.arange(len(y_true_sorted))
-
-    mae = mean_absolute_error(y_true, y_pred)
-    rmse = np.sqrt(mean_squared_error(y_true, y_pred))
-    pearson = pearson_scorer(y_true, y_pred)
-
-    plt.figure(figsize=(14, 7))
-
-    # Actual values as a clear reference line.
-    plt.plot(x, y_true_sorted, color='black', linewidth=2, label='Actual PHQ score')
-
-    # Predictions as dots, with thin connectors to their corresponding actual
-    # value to make the residual (error) for each sample visible at a glance.
-    plt.vlines(x, y_true_sorted, y_pred_sorted, color='lightgray', linewidth=1, zorder=1)
-    plt.scatter(x, y_pred_sorted, alpha=0.8, color='steelblue', edgecolors='k',
-                zorder=2, label='Predicted PHQ score')
-
-    plt.xlabel('Samples (sorted by actual PHQ score)')
-    plt.ylabel('PHQ score')
-    plt.title(
-        f'Predictions vs Actual ({model_name})\n'
-        f'MAE={mae:.3f}, RMSE={rmse:.3f}, Pearson={pearson:.3f}'
-    )
-    plt.legend()
-    plt.tight_layout()
-    plt.savefig(out_path)
-    plt.close()
-    print(f"Saved prediction visualization to '{out_path}'")
 
 
 def create_interpretability_plots(best_model_info, all_results, X_test_tfidf, y_test, feature_names, svd=None):
-    ensure_media_dir()
+    common.ensure_media_dir()
     best_model = best_model_info['model']
 
     if svd is not None:
@@ -202,9 +35,6 @@ def create_interpretability_plots(best_model_info, all_results, X_test_tfidf, y_
     else:
         model_for_perm = best_model
 
-    # Generic model-agnostic importance for whichever model wins.
-    # Convert sparse X_test_tfidf to dense array because permutation_importance 
-    # might raise InvalidParameterError with some sklearn versions/models if sparse.
     X_test_dense = X_test_tfidf.toarray() if hasattr(X_test_tfidf, "toarray") else X_test_tfidf
 
     perm = permutation_importance(
@@ -217,53 +47,56 @@ def create_interpretability_plots(best_model_info, all_results, X_test_tfidf, y_
         n_jobs=-1
     )
     permutation_values = perm.importances_mean
-    plot_unsigned_feature_importance(
+    common.plot_unsigned_feature_importance(
         permutation_values,
         feature_names,
         f"{best_model_info['name']} permutation",
-        '../media/tfidf_best_model_permutation_importance.png'
+        common.media_path('tfidf_best_model_permutation_importance.png')
     )
 
-    # Extra signed view when a linear model is available.
     linear_candidates = [r for r in all_results if hasattr(r['model'], 'coef_')]
     if linear_candidates:
-        best_linear = min(linear_candidates, key=model_score_for_picking)
+        best_linear = min(linear_candidates, key=common.model_score_for_picking)
         coef = np.asarray(best_linear['model'].coef_).ravel()
         if svd is not None:
             coef = coef @ svd.components_
-        plot_signed_feature_importance(
+        common.plot_signed_feature_importance(
             coef,
             feature_names,
             best_linear['name'],
-            '../media/tfidf_best_linear_coefficients.png'
+            common.media_path('tfidf_best_linear_coefficients.png')
         )
 
-    # Optional tree-specific view.
     tree_candidates = [r for r in all_results if hasattr(r['model'], 'feature_importances_')]
     if tree_candidates:
         if svd is not None:
             print("Skipping tree-specific feature importance because TruncatedSVD mapping is not straightforward.")
         else:
-            best_tree = min(tree_candidates, key=model_score_for_picking)
+            best_tree = min(tree_candidates, key=common.model_score_for_picking)
             tree_values = np.asarray(best_tree['model'].feature_importances_)
-            plot_unsigned_feature_importance(
+            common.plot_unsigned_feature_importance(
                 tree_values,
                 feature_names,
                 best_tree['name'],
-                '../media/tfidf_best_tree_feature_importance.png'
+                common.media_path('tfidf_best_tree_feature_importance.png')
             )
+
 
 def main():
     print("Loading training data...")
-    train_ids, train_texts, train_labels = load_data(os.path.join(LABELS_DIR, 'train_split.csv'))
-    
+    train_ids, train_texts, train_labels = common.load_data(
+        os.path.join(common.LABELS_DIR, 'train_split.csv'), lowercase=True, verbose=True)
+
     print("Loading development data...")
-    dev_ids, dev_texts, dev_labels = load_data(os.path.join(LABELS_DIR, 'dev_split.csv'))
+    dev_ids, dev_texts, dev_labels = common.load_data(
+        os.path.join(common.LABELS_DIR, 'dev_split.csv'), lowercase=True, verbose=True)
 
     print("Loading test data...")
-    test_ids, test_texts, test_labels = load_data(os.path.join(LABELS_DIR, 'test_split.csv'))
-    
-    print(f"Loaded {len(train_texts)} train transcripts, {len(dev_texts)} dev transcripts, {len(test_texts)} test transcripts.")
+    test_ids, test_texts, test_labels = common.load_data(
+        os.path.join(common.LABELS_DIR, 'test_split.csv'), lowercase=True, verbose=True)
+
+    print(f"Loaded {len(train_texts)} train transcripts, {len(dev_texts)} dev transcripts, "
+          f"{len(test_texts)} test transcripts.")
 
     # Combine train and dev for cross-validation
     X_train_dev_texts = train_texts + dev_texts
@@ -288,108 +121,17 @@ def main():
     X_train_dev_features = svd.fit_transform(X_train_dev_tfidf)
     X_test_features = svd.transform(X_test_tfidf)
 
-    scoring = {
-        'MAE': 'neg_mean_absolute_error',
-        'RMSE': 'neg_root_mean_squared_error',
-        'Pearson': make_scorer(pearson_scorer)
-    }
+    models_to_run = common.default_models(bayesian_needs_dense=True)
 
-    models_to_run = [
-        {
-            'name': 'Ridge',
-            'estimator': Ridge(random_state=42),
-            'param_dist': {
-                'alpha': loguniform(1e-4, 1e3)
-            },
-            'n_iter': 1000
-        },
-        {
-            'name': 'ElasticNet',
-            'estimator': ElasticNet(max_iter=10000, random_state=42),
-            'param_dist': {
-                'alpha': loguniform(1e-4, 1e3),
-                'l1_ratio': uniform(0, 1)
-            },
-            'n_iter': 1000
-        },
-        {
-            'name': 'SVR',
-            'estimator': SVR(),
-            'param_dist': {
-                'C': loguniform(1e-4, 1e4),
-                'epsilon': uniform(0.001, 0.8),
-                'gamma': ['scale', 'auto', 0.1, 0.01],
-                'kernel': ['rbf', 'linear', 'poly']
-            },
-            'n_iter': 1000
-        },
-        {
-            'name': 'RandomForest',
-            'estimator': RandomForestRegressor(random_state=42),
-            'param_dist': {
-                'n_estimators': [100, 200, 300],
-                'max_depth': [None, 10, 20, 30],
-                'min_samples_split': [2, 5, 10],
-                'min_samples_leaf': [1, 2, 4]
-            },
-            'n_iter': 30
-        },
-        {
-            'name': 'GradientBoosting',
-            'estimator': GradientBoostingRegressor(random_state=42),
-            'param_dist': {
-                'n_estimators': [100, 200],
-                'learning_rate': [0.01, 0.1, 0.2],
-                'max_depth': [3, 5, 7],
-                'subsample': [0.8, 1.0]
-            },
-            'n_iter': 20
-        },
-        {
-            'name': 'BayesianRidge',
-            'estimator': BayesianRidge(),
-            'param_dist': {
-                'alpha_1': loguniform(1e-4, 1e-1),
-                'alpha_2': loguniform(1e-4, 1e-1),
-                'lambda_1': loguniform(1e-4, 1e-1),
-                'lambda_2': loguniform(1e-4, 1e-1)
-            },
-            'n_iter': 20,
-            'needs_dense': True
-        },
-        {
-            'name': 'MLPRegressor',
-            'estimator': MLPRegressor(max_iter=1000, random_state=42, early_stopping=True),
-            'param_dist': {
-                'hidden_layer_sizes': [(50,), (100,), (50, 50)],
-                'activation': ['relu', 'tanh'],
-                'alpha': loguniform(1e-5, 1e-1),
-                'learning_rate_init': loguniform(1e-4, 1e-1)
-            },
-            'n_iter': 50
-        }
-    ]
-
-    results_for_picking = []
     print("\nTraining and tuning models...")
-    for model_cfg in models_to_run:
-        print(f"Running {model_cfg['name']}...")
-        result = run_random_search(model_cfg, X_train_dev_features, y_train_dev, scoring)
-        results_for_picking.append(result)
+    results_for_picking = common.cross_validate_models(
+        models_to_run, X_train_dev_features, y_train_dev)
 
-    print("\n--- Cross-Validation Summary on Combined Train+Dev ---")
-    print(f"{'Model':<18} | {'CV MAE':<8} | {'CV RMSE':<8} | {'CV Pearson':<10}")
-    print("-" * 60)
-    for result in results_for_picking:
-        print(
-            f"{result['name']:<18} | {result['MAE']:<8.4f} | "
-            f"{result['RMSE']:<8.4f} | {result['Pearson']:<10.4f}"
-        )
+    common.print_cv_summary(results_for_picking, 'Cross-Validation Summary on Combined Train+Dev',
+                            name_width=18)
 
-    # Picking the best model using the same heuristic as in traditional_ml_sound.py
-    best_model_info = min(results_for_picking, key=model_score_for_picking)
+    best_model_info = min(results_for_picking, key=common.model_score_for_picking)
     print(f"\n>>> Best Model Picked: {best_model_info['name']} <<<")
-
 
     # print("\n--- FINAL SUMMARY OF THE BEST MODEL ON TEST ---")
     # print("=" * 50)
@@ -399,21 +141,18 @@ def main():
     # test_preds = best_model.predict(X_test_for_pred)
     # t_mae = mean_absolute_error(test_labels, test_preds)
     # t_rmse = np.sqrt(mean_squared_error(test_labels, test_preds))
-    # t_pearson = pearson_scorer(test_labels, test_preds)
+    # t_pearson = common.pearson_scorer(test_labels, test_preds)
     # print(f"{best_name} | {best_model_info['params']}")
     # print(f"MAE: {t_mae:.4f} | RMSE: {t_rmse:.4f} | Pearson: {t_pearson:.4f}")
     # print("=" * 50)
     #
     # # Plot predictions of the best model (on the original PHQ scale by adding back the mean).
-    # ensure_media_dir()
-    # plot_predictions(
+    # common.plot_predictions(
     #     test_labels,
     #     test_preds,
     #     best_name,
-    #     '../media/tfidf_best_model_predictions.png'
+    #     common.media_path('tfidf_best_model_predictions.png')
     # )
-
-    # TODO: Add multiple words vectorization, it was already tried and it was just a tiny bit worse than this. Also try combination of the 2 approaches.
 
     print("\n--- Interpretability Visualizations ---")
     feature_names = vectorizer.get_feature_names_out()
@@ -425,6 +164,7 @@ def main():
         feature_names,
         svd=svd
     )
+
 
 if __name__ == "__main__":
     main()
