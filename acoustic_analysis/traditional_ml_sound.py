@@ -34,29 +34,28 @@ def load_audio_features(csv_path):
     for index, row in df.iterrows():
         participant_id = int(row['Participant_ID'])
         score = row['PHQ_Score']
-        file_path = f"dataset/wwwedaic/data/{participant_id}_P/{participant_id}_AUDIO.wav"
+        file_path = f"../dataset/wwwedaic/data/{participant_id}_P/{participant_id}_AUDIO.wav"
 
         if os.path.exists(file_path):
             print(f"Processing {file_path}...")
-            windows = get_mfcc_windows(file_path, 13, 42, 18)
+            windows = get_mfcc_windows(file_path, 40, 30, 30)
             if len(windows) == 0:
                 print(f"Warning: no windows extracted from {file_path}.")
                 continue
 
-            windows_arr = np.array([w.flatten() for w in windows])
-
-            deltas = np.array([librosa.feature.delta(w) for w in windows])
-            delta2s = np.array([librosa.feature.delta(w, order=2) for w in windows])
-
+            windows = np.array(windows, dtype=np.float32)
+            mfcc = windows[:, 0, :, :]
+            delta = windows[:, 1, :, :]
+            delta2 = windows[:, 2, :, :]
             features = np.concatenate([
-                windows_arr.mean(axis=0),
-                windows_arr.std(axis=0),
-                windows_arr.min(axis=0),
-                windows_arr.max(axis=0),
-                deltas.mean(axis=(0, 2)),
-                deltas.std(axis=(0, 2)),
-                delta2s.mean(axis=(0, 2)),
-                delta2s.std(axis=(0, 2)),
+                mfcc.mean(axis=(0, 2)),
+                mfcc.std(axis=(0, 2)),
+                mfcc.min(axis=(0, 2)),
+                mfcc.max(axis=(0, 2)),
+                delta.mean(axis=(0, 2)),
+                delta.std(axis=(0, 2)),
+                delta2.mean(axis=(0, 2)),
+                delta2.std(axis=(0, 2)),
             ])
 
             X.append(features)
@@ -201,7 +200,7 @@ def main():
         print(f"{res['name']:<15} | {res['MAE']:<8.4f} | {res['RMSE']:<8.4f} | {res['Pearson']:<8.4f}")
 
 
-    # X_test, y_test = load_audio_features("dataset/wwwedaic/labels/test_split.csv")
+    # X_test, y_test = load_audio_features("../dataset/wwwedaic/labels/test_split.csv")
     #
     # print("FINAL SUMMARY OF THE BEST MODEL ON TEST")
     # print("=" * 50)

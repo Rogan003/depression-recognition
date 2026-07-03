@@ -10,8 +10,8 @@ from sklearn.metrics import mean_absolute_error, mean_squared_error
 from sklearn.model_selection import KFold
 from scipy.stats import pearsonr
 
+
 class AudioDataset(Dataset):
-    """One sample per audio: a sequence of MFCC windows + one PHQ score."""
     def __init__(self, csv_path, window_size=10, hop_length=5):
         self.df = pd.read_csv(csv_path)
         self.data = []
@@ -20,13 +20,12 @@ class AudioDataset(Dataset):
         for index, row in self.df.iterrows():
             participant_id = int(row['Participant_ID'])
             score = float(row['PHQ_Score'])
-            file_path = f"dataset/wwwedaic/data/{participant_id}_P/{participant_id}_AUDIO.wav"
+            file_path = f"../dataset/wwwedaic/data/{participant_id}_P/{participant_id}_AUDIO.wav"
 
             if os.path.exists(file_path):
                 print(f"Processing {file_path}...")
-                windows = get_mfcc_windows(file_path, window_size_s=window_size, hop_length_s=hop_length)
+                windows = get_mfcc_windows(file_path, 40, window_size_s=window_size, hop_length_s=hop_length)
                 if len(windows) > 0:
-                    # shape: (num_windows, n_mfcc, time_frames)
                     windows_arr = np.asarray(windows, dtype=np.float32)
                     self.data.append((windows_arr, score))
                 else:
@@ -39,53 +38,44 @@ class AudioDataset(Dataset):
 
     def __getitem__(self, idx):
         windows, y = self.data[idx]
-        # add channel dim -> (num_windows, 1, n_mfcc, time_frames)
-        x = torch.from_numpy(windows).unsqueeze(1)
-        return x, torch.FloatTensor([y])
+        return torch.from_numpy(windows), torch.FloatTensor([y])
 
-class CNNLSTM(nn.Module):
-    """
-    Hierarchical encoder:
-      - CNN encodes each MFCC window into a fixed-size vector.
-      - LSTM consumes the sequence of window vectors for one audio.
-      - FC head produces a single PHQ score per audio.
-    """
-    def __init__(self, cnn_feat_dim=32, lstm_hidden=64):
-        super(CNNLSTM, self).__init__()
+
+class CNNRegressor(nn.Module):
+    def __init__(self, dropout=0.4):
+        super().__init__()
         self.cnn = nn.Sequential(
-            nn.Conv2d(1, 16, kernel_size=3, padding=1),
-            nn.BatchNorm2d(16),
+            nn.Conv2d(3, 16, kernel_size=3, padding=1),
+            nn.GroupNorm(4, 16),
             nn.ReLU(),
-            nn.MaxPool2d(2),
-            nn.Conv2d(16, cnn_feat_dim, kernel_size=3, padding=1),
-            nn.BatchNorm2d(cnn_feat_dim),
-            nn.ReLU(),
-            nn.MaxPool2d(2),
-            nn.Dropout(0.2),
-        )
-        # collapse remaining spatial dims so each window becomes a vector
-        self.pool = nn.AdaptiveAvgPool2d((1, 1))
+            nn.MaxPool2d((1, 2)),
 
-        self.lstm = nn.LSTM(
-            input_size=cnn_feat_dim,
-            hidden_size=lstm_hidden,
-            batch_first=True,
-            num_layers=2,
-            dropout=0.2,
+            nn.Conv2d(16, 32, kernel_size=3, padding=1),
+            nn.GroupNorm(8, 32),
+            nn.ReLU(),
+            nn.MaxPool2d(2),
+
+            nn.Conv2d(32, 48, kernel_size=3, padding=1),
+            nn.GroupNorm(8, 48),
+            nn.ReLU(),
+            nn.MaxPool2d(2),
         )
-        self.fc = nn.Linear(lstm_hidden, 1)
+        self.pool = nn.AdaptiveAvgPool2d((1, 1))
+        self.dropout = nn.Dropout(dropout)
+        self.fc = nn.Linear(96, 1)
 
     def forward(self, x):
-        # x: (batch, num_windows, 1, n_mfcc, time)
         b, n, c, h, w = x.size()
-        # treat all windows in the batch as a flat batch for the CNN
         x = x.view(b * n, c, h, w)
-        feat = self.cnn(x)               # (b*n, C, h', w')
-        feat = self.pool(feat)           # (b*n, C, 1, 1)
-        feat = feat.view(b, n, -1)       # (b, n, C)
+        feat = self.cnn(x)
+        feat = self.pool(feat).flatten(1)
+        feat = feat.view(b, n, -1)
+        mean = feat.mean(dim=1)
+        std = feat.std(dim=1)
+        pooled = torch.cat([mean, std], dim=1)
+        pooled = self.dropout(pooled)
+        return self.fc(pooled)
 
-        lstm_out, _ = self.lstm(feat)    # (b, n, hidden)
-        return self.fc(lstm_out[:, -1, :])  # (b, 1) -- one score per audio
 
 def combined_loss(y_pred, y_true, alpha=0.5):
     mae = torch.mean(torch.abs(y_pred - y_true))
@@ -106,11 +96,12 @@ def combined_loss(y_pred, y_true, alpha=0.5):
     pearson = numerator / denominator
     return alpha * mae + (1 - alpha) * (1 - pearson)
 
+
 def main(window_size=10, hop_length=5):
     torch.manual_seed(42)
     np.random.seed(42)
 
-    device = torch.device("cpu") # using Mac GPU got me worse results
+    device = torch.device("mps")
 
     train_dataset = AudioDataset("../dataset/wwwedaic/labels/train_split.csv", window_size, hop_length)
     val_dataset = AudioDataset("../dataset/wwwedaic/labels/dev_split.csv", window_size, hop_length)
@@ -137,7 +128,7 @@ def main(window_size=10, hop_length=5):
         train_loader = DataLoader(train_sub, batch_size=1, shuffle=True)
         val_loader = DataLoader(val_sub, batch_size=1, shuffle=False)
 
-        model = CNNLSTM().to(device)
+        model = CNNRegressor().to(device)
         optimizer = optim.Adam(model.parameters(), lr=0.001, weight_decay=1e-5)
         scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=2)
 
@@ -189,7 +180,7 @@ def main(window_size=10, hop_length=5):
         
         print(f"Fold {fold+1} Results - MAE: {mae:.4f}, RMSE: {rmse:.4f}, Pearson: {pearson_corr:.4f}")
 
-    print(f"\nCNN+LSTM CV Results (Average):")
+    print(f"\nCNN CV Results (Average):")
     print(f"MAE: {np.mean(cv_maes):.4f} (+/- {np.std(cv_maes):.4f})")
     print(f"RMSE: {np.mean(cv_rmses):.4f} (+/- {np.std(cv_rmses):.4f})")
     print(f"Pearson correlation: {np.mean(cv_pearsons):.4f} (+/- {np.std(cv_pearsons):.4f})")
@@ -210,5 +201,6 @@ def main(window_size=10, hop_length=5):
     # test_pearson, _ = pearsonr(test_targets, test_preds)
     # print(f"Test Results - MAE: {test_mae:.4f}, RMSE: {test_rmse:.4f}, Pearson: {test_pearson:.4f}")
 
+
 if __name__ == "__main__":
-    main(42, 18)
+    main(30, 30)

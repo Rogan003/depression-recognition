@@ -34,23 +34,36 @@ def split_dataset_80_10_10(df, seed=42):
     val_df.to_csv("dataset/val.csv", index=False)
     test_df.to_csv("dataset/test.csv", index=False)
 
-def get_mfcc_windows(file_path, n_mfcc=13, window_size_s=10, hop_length_s=5):
+def get_mfcc_windows(file_path, n_mfcc=40, window_size_s=10, hop_length_s=5):
     sr = 16000
     audio = preprocess(file_path, sr)
-    hop_length = 16384
+    hop_length = 512
 
-    mfcc = extract_mfcc(audio, sr, n_mfcc=n_mfcc, hop_length=hop_length)
+    features = extract_mfcc(
+        audio,
+        sr,
+        n_mfcc=n_mfcc,
+        hop_length=hop_length
+    )
 
     frames_per_sec = sr / hop_length
     window_frames = int(window_size_s * frames_per_sec)
     hop_frames = int(hop_length_s * frames_per_sec)
     
     windows = []
-    for start in range(0, mfcc.shape[1] - window_frames + 1, hop_frames):
-        window = mfcc[:, start : start + window_frames]
+
+    total_frames = features.shape[2]
+
+    for start in range(
+        0,
+        total_frames - window_frames + 1,
+        hop_frames
+    ):
+        window = features[:, :, start:start + window_frames]
+
         windows.append(window)
-        
-    return np.array(windows) # Shape: (n_windows, n_mfcc, window_frames)
+
+    return np.array(windows, dtype=np.float32) # (n_windows, 3, n_mfcc, window_frames)
 
 def preprocess(file_path, sr):
     # 1. Load + resample + mono
@@ -86,4 +99,9 @@ def preprocess(file_path, sr):
 #     return audio
 
 def extract_mfcc(audio, sr, n_mfcc=13, hop_length=512):
-    return librosa.feature.mfcc(y=audio, sr=sr, n_mfcc=n_mfcc, hop_length=hop_length)
+    mfcc = librosa.feature.mfcc(y=audio, sr=sr, n_mfcc=n_mfcc, hop_length=hop_length)
+    delta = librosa.feature.delta(mfcc)
+    delta2 = librosa.feature.delta(mfcc, order=2)
+
+    features = np.stack([mfcc, delta, delta2], axis=0)
+    return features
