@@ -147,9 +147,15 @@ def main():
     dev_ids, dev_texts, dev_labels = common.load_data(
         os.path.join(common.LABELS_DIR, 'dev_split.csv'))
 
+    print("Loading test data...")
+    test_ids, test_texts, test_labels = common.load_data(
+        os.path.join(common.LABELS_DIR, 'test_split.csv'))
+
     all_texts = train_texts + dev_texts
     all_labels = np.array(list(train_labels) + list(dev_labels), dtype=float)
-    print(f"Scoring {len(all_texts)} transcripts via symptom-wise prompting...")
+    test_labels = np.array(list(test_labels), dtype=float)
+    print(f"Scoring {len(all_texts)} train+dev and {len(test_texts)} test transcripts "
+          f"via symptom-wise prompting...")
 
     scorer = FlanItemScorer()
 
@@ -171,6 +177,25 @@ def main():
         preds,
         f"Zero-shot prompt ({MODEL_NAME})",
         common.media_path('prompt_zeroshot_best_model_predictions.png')
+    )
+
+    print("\nScoring test transcripts...")
+    test_preds = []
+    for idx, text in enumerate(test_texts):
+        print(f"  Prompting test transcript {idx + 1}/{len(test_texts)}", end='\r')
+        test_preds.append(scorer.score_transcript(text))
+    print()
+    test_preds = np.array(test_preds, dtype=float)
+
+    print(f"\n--- Zero-shot Prompt PHQ-8 Estimation on held-out test ({MODEL_NAME}) ---")
+    common.print_point_metrics(test_labels, test_preds)
+    common.print_baseline(test_labels)
+
+    common.plot_predictions(
+        test_labels,
+        test_preds,
+        f"Zero-shot prompt ({MODEL_NAME})",
+        common.media_path('prompt_zeroshot_best_model_test_predictions.png')
     )
 
 

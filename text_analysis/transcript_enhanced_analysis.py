@@ -88,29 +88,34 @@ def main():
     print("Loading and enhancing data...")
     train_df = load_data_enhanced(os.path.join(common.LABELS_DIR, 'train_split.csv'))
     dev_df = load_data_enhanced(os.path.join(common.LABELS_DIR, 'dev_split.csv'))
-    print(f"Loaded {len(train_df)} train, {len(dev_df)} dev samples.")
+    test_df = load_data_enhanced(os.path.join(common.LABELS_DIR, 'test_split.csv'))
+    print(f"Loaded {len(train_df)} train, {len(dev_df)} dev, {len(test_df)} test samples.")
 
     full_df = pd.concat([train_df, dev_df], ignore_index=True)
 
     base_cols = ['unique_words', 'neg_emotion_rate', 'num_turns', 'total_duration']
     X_base = full_df[base_cols].values
+    X_base_test = test_df[base_cols].values
 
     print("Vectorizing text (TF-IDF)...")
     vectorizer = TfidfVectorizer(stop_words='english', ngram_range=(1, 2),
                                  max_features=100, min_df=3, max_df=0.9)
     X_tfidf = vectorizer.fit_transform(full_df['Text']).toarray()
+    X_tfidf_test = vectorizer.transform(test_df['Text']).toarray()
 
     print("Encoding text (all-mpnet-base-v2, chunked over full transcript)...")
     embedder = SentenceTransformer('all-mpnet-base-v2')
     X_emb = common.encode_long_texts(embedder, full_df['Text'].tolist(), CHUNK_WORDS, CHUNK_OVERLAP)
+    X_emb_test = common.encode_long_texts(embedder, test_df['Text'].tolist(), CHUNK_WORDS, CHUNK_OVERLAP)
 
     X_hybrid = np.hstack([X_base, X_tfidf, X_emb])
-    scaler = StandardScaler()
-    X_hybrid_scaled = scaler.fit_transform(X_hybrid)
+    X_hybrid_test = np.hstack([X_base_test, X_tfidf_test, X_emb_test])
     y = full_df['PHQ_Score'].values
+    y_test = test_df['PHQ_Score'].values
 
     print("\nTraining and tuning hybrid models with 5-fold cross-validation...")
-    results = common.cross_validate_models(common.default_models(), X_hybrid_scaled, y)
+    results = common.cross_validate_models(
+        common.default_models(), X_hybrid, y, scaler=StandardScaler())
 
     common.print_cv_summary(results, 'Cross-Validation Summary (Hybrid features, combined Train+Dev)',
                             name_width=16)
@@ -118,7 +123,14 @@ def main():
 
     best_result = min(results, key=common.model_score_for_picking)
     print(f"\nBest model: {best_result['name']} (CV MAE {best_result['MAE']:.4f})")
-    oof_preds = common.out_of_fold_predictions(best_result['model'], X_hybrid_scaled, y)
+
+    common.evaluate_on_test(
+        results, X_hybrid_test, y_test, name_width=16,
+        plot_out_path=common.media_path('enhanced_best_model_test_predictions.png'),
+        best_name=best_result['name'],
+        label_fn=lambda name: f"Hybrid {name}", plot_ylabel='PHQ-8 score')
+
+    oof_preds = common.out_of_fold_predictions(best_result['model'], X_hybrid, y)
     print(f"Out-of-fold R2: {r2_score(y, oof_preds):.4f}")
     common.plot_predictions(
         y, oof_preds, f"Hybrid {best_result['name']}",

@@ -13,6 +13,8 @@ from sklearn.metrics import (
 )
 from sklearn.model_selection import RandomizedSearchCV, cross_val_predict
 from sklearn.neural_network import MLPRegressor
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import StandardScaler, MinMaxScaler, RobustScaler
 from sklearn.svm import SVR
 
 DATA_DIR = '../dataset/wwwedaic/data'
@@ -207,13 +209,19 @@ def default_models(bayesian_needs_dense=False):
     ]
 
 
-def run_random_search(model_cfg, X, y, scoring):
+def run_random_search(model_cfg, X, y, scoring, scaler=None):
     if model_cfg.get('needs_dense', False) and hasattr(X, 'toarray'):
         X = X.toarray()
 
+    estimator = clone(model_cfg['estimator'])
+    param_dist = model_cfg['param_dist']
+    if scaler is not None:
+        estimator = Pipeline([('scaler', clone(scaler)), ('model', estimator)])
+        param_dist = {f'model__{key}': value for key, value in param_dist.items()}
+
     search = RandomizedSearchCV(
-        estimator=clone(model_cfg['estimator']),
-        param_distributions=model_cfg['param_dist'],
+        estimator=estimator,
+        param_distributions=param_dist,
         n_iter=model_cfg['n_iter'],
         cv=5,
         scoring=scoring,
@@ -229,7 +237,10 @@ def run_random_search(model_cfg, X, y, scoring):
     cv_rmse = -cv_results['mean_test_RMSE'][best_idx]
     cv_pearson = cv_results['mean_test_Pearson'][best_idx]
 
-    print(f"Best {model_cfg['name']} params: {search.best_params_}")
+    best_params = {key.replace('model__', '', 1): value
+                   for key, value in search.best_params_.items()}
+
+    print(f"Best {model_cfg['name']} params: {best_params}")
     print(f"CV MAE: {cv_mae:.4f}, RMSE: {cv_rmse:.4f}, Pearson: {cv_pearson:.4f}")
 
     return {
@@ -238,18 +249,66 @@ def run_random_search(model_cfg, X, y, scoring):
         'RMSE': cv_rmse,
         'Pearson': cv_pearson,
         'model': search.best_estimator_,
-        'params': search.best_params_,
+        'params': best_params,
         'needs_dense': model_cfg.get('needs_dense', False),
     }
 
 
-def cross_validate_models(models, X, y, scoring=None):
+def cross_validate_models(models, X, y, scoring=None, scaler=None):
     scoring = make_scoring() if scoring is None else scoring
     results = []
     for model_cfg in models:
         print(f"\nRunning {model_cfg['name']}...")
-        results.append(run_random_search(model_cfg, X, y, scoring))
+        results.append(run_random_search(model_cfg, X, y, scoring, scaler=scaler))
     return results
+
+
+def evaluate_on_test(results, X_test, y_test,
+                     title='Test Set Evaluation (all models)', name_width=14,
+                     plot_out_path=None, best_name=None,
+                     plot_color='steelblue', plot_ylabel='PHQ score', label_fn=None):
+    y_test = np.asarray(y_test, dtype=float)
+    print(f"\n--- {title} ---")
+    print(f"{'Model':<{name_width}} | {'MAE':<8} | {'RMSE':<8} | {'Pearson':<10}")
+    print("-" * (name_width + 36))
+
+    metrics = []
+    for result in results:
+        model = result.get('model')
+        if model is None:
+            continue
+        X_eval = X_test
+        if result.get('needs_dense', False) and hasattr(X_test, 'toarray'):
+            X_eval = X_test.toarray()
+        preds = model.predict(X_eval)
+        test_mae = mean_absolute_error(y_test, preds)
+        test_rmse = np.sqrt(mean_squared_error(y_test, preds))
+        test_pearson = pearson_corr(y_test, preds)
+        print(
+            f"{result['name']:<{name_width}} | {test_mae:<8.4f} | "
+            f"{test_rmse:<8.4f} | {test_pearson:<10.4f}"
+        )
+        metrics.append({
+            'name': result['name'],
+            'MAE': test_mae,
+            'RMSE': test_rmse,
+            'Pearson': test_pearson,
+            'preds': preds,
+        })
+
+    if plot_out_path and metrics:
+        best_metric = None
+        if best_name is not None:
+            best_metric = next((m for m in metrics if m['name'] == best_name), None)
+        if best_metric is None:
+            best_metric = min(metrics, key=model_score_for_picking)
+        print(f"\nGenerating test-set prediction visualization for best model "
+              f"({best_metric['name']})...")
+        label = label_fn(best_metric['name']) if label_fn else best_metric['name']
+        plot_predictions(y_test, best_metric['preds'], label, plot_out_path,
+                         color=plot_color, ylabel=plot_ylabel)
+
+    return metrics
 
 
 def out_of_fold_predictions(model, X, y, cv=5):
@@ -350,28 +409,43 @@ def plot_unsigned_feature_importance(values, feature_names, model_name, out_path
 
 def run_regression_pipeline(
     X, y, plot_out_path, *,
+    X_test=None, y_test=None,
     models=None,
     scoring=None,
+    scaler=StandardScaler(),
     summary_title='Cross-Validation Summary on Combined Train+Dev',
     name_width=14,
     label_fn=None,
     plot_color='steelblue',
     plot_ylabel='PHQ score',
+    plot_cv_predictions=False,
+    predict_on_test=True,
 ):
     models = default_models() if models is None else models
     scoring = make_scoring() if scoring is None else scoring
 
     print("\nTraining and tuning models with cross-validation...")
-    results = cross_validate_models(models, X, y, scoring)
+    results = cross_validate_models(models, X, y, scoring, scaler=scaler)
 
     print_cv_summary(results, summary_title, name_width)
     print_baseline(y)
 
     best_result = min(results, key=model_score_for_picking)
-    print(f"\nGenerating prediction visualization for best model ({best_result['name']})...")
-    oof_preds = out_of_fold_predictions(best_result['model'], X, y)
+    print(f"\n>>> Best model picked: {best_result['name']} <<<")
 
-    label = label_fn(best_result['name']) if label_fn else best_result['name']
-    plot_predictions(y, oof_preds, label, plot_out_path,
-                     color=plot_color, ylabel=plot_ylabel)
-    return results, best_result
+    test_metrics = None
+    if predict_on_test and X_test is not None and y_test is not None:
+        test_metrics = evaluate_on_test(
+            results, X_test, y_test, name_width=name_width,
+            plot_out_path=plot_out_path, best_name=best_result['name'],
+            plot_color=plot_color, plot_ylabel=plot_ylabel, label_fn=label_fn)
+
+    if plot_cv_predictions:
+        print(f"\nGenerating out-of-fold prediction visualization for best model "
+              f"({best_result['name']})...")
+        oof_preds = out_of_fold_predictions(best_result['model'], X, y)
+        label = label_fn(best_result['name']) if label_fn else best_result['name']
+        plot_predictions(y, oof_preds, label, plot_out_path,
+                         color=plot_color, ylabel=plot_ylabel)
+
+    return results, best_result, test_metrics

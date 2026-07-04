@@ -60,28 +60,35 @@ def main():
     dev_ids, dev_texts, dev_labels = common.load_data(
         os.path.join(common.LABELS_DIR, 'dev_split.csv'))
 
-    print(f"Loaded {len(train_texts)} train transcripts, {len(dev_texts)} dev transcripts.")
+    print("Loading test data...")
+    test_ids, test_texts, test_labels = common.load_data(
+        os.path.join(common.LABELS_DIR, 'test_split.csv'))
+
+    print(f"Loaded {len(train_texts)} train transcripts, {len(dev_texts)} dev transcripts, "
+          f"{len(test_texts)} test transcripts.")
 
     all_texts = train_texts + dev_texts
     print(f"Lemmatizing and selecting top-{TOP_K_WORDS} TF-IDF words per transcript...")
     reduced_texts = build_reduced_texts(all_texts, top_k=TOP_K_WORDS)
+    reduced_test_texts = build_reduced_texts(test_texts, top_k=TOP_K_WORDS)
 
     print("Loading SentenceTransformer model (all-mpnet-base-v2)...")
     embedder = SentenceTransformer('all-mpnet-base-v2')
 
     print("Encoding reduced texts...")
     embeddings = embedder.encode(reduced_texts, show_progress_bar=True)
+    test_embeddings = embedder.encode(reduced_test_texts, show_progress_bar=True)
 
     X_train_dev = np.asarray(embeddings)
     y_train_dev = np.concatenate([train_labels, dev_labels])
 
-    scaler = StandardScaler()
-    X_train_dev_scaled = scaler.fit_transform(X_train_dev)
-
     common.run_regression_pipeline(
-        X_train_dev_scaled,
+        X_train_dev,
         y_train_dev,
         common.media_path('mpnet_lemma_tfidf_best_model_predictions.png'),
+        X_test=np.asarray(test_embeddings),
+        y_test=test_labels,
+        scaler=StandardScaler(),
         summary_title='Cross-Validation Summary (mpnet + lemma + TF-IDF top words)',
         label_fn=lambda name: f"mpnet+lemma+TFIDF + {name}",
         plot_color='seagreen',

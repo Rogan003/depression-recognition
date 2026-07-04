@@ -204,7 +204,12 @@ def main():
     dev_ids, dev_texts, dev_labels = common.load_data(
         os.path.join(common.LABELS_DIR, 'dev_split.csv'))
 
-    print(f"Loaded {len(train_texts)} train transcripts, {len(dev_texts)} dev transcripts.")
+    print("Loading test data...")
+    test_ids, test_texts, test_labels = common.load_data(
+        os.path.join(common.LABELS_DIR, 'test_split.csv'))
+
+    print(f"Loaded {len(train_texts)} train transcripts, {len(dev_texts)} dev transcripts, "
+          f"{len(test_texts)} test transcripts.")
 
     print("Loading SentenceTransformer model (all-mpnet-base-v2)...")
     embedder = SentenceTransformer('all-mpnet-base-v2')
@@ -215,14 +220,26 @@ def main():
     print("Encoding dev texts (per-window embeddings over the full transcript)...")
     dev_chunk_embeddings = encode_long_texts(embedder, dev_texts)
 
+    print("Encoding test texts (per-window embeddings over the full transcript)...")
+    test_chunk_embeddings = encode_long_texts(embedder, test_texts)
+
     all_chunk_embeddings = train_chunk_embeddings + dev_chunk_embeddings
     y_train_dev = np.concatenate([train_labels, dev_labels])
+    y_test = np.asarray(test_labels, dtype=float)
 
     X = attention_pool_oof(all_chunk_embeddings, y_train_dev)
+    # Scaling is done leak-free inside the cross-validation pipeline.
     results = common.cross_validate_models(
             common.default_models(bayesian_needs_dense=True),
-            StandardScaler().fit_transform(X), y_train_dev
+            X, y_train_dev, scaler=StandardScaler()
     )
+
+    # Pool the held-out test transcripts with an attention pooler fit on the full
+    # train+dev set (fit once, no leakage from the test set).
+    print("\nPooling test transcripts for zoo evaluation...")
+    test_pooler = AttentionRegressor()
+    test_pooler.fit(all_chunk_embeddings, y_train_dev)
+    X_test_pooled = test_pooler.transform(test_chunk_embeddings)
 
     print("\nRunning AttentionNet (leak-free out-of-fold cross-validation)...")
     attn_oof = cross_validate_attention(all_chunk_embeddings, y_train_dev)
@@ -242,12 +259,37 @@ def main():
     common.print_baseline(y_train_dev)
 
     best_result = min(results, key=common.model_score_for_picking)
-    print(f"\nGenerating prediction visualization for best model ({best_result['name']})...")
+
+    test_metrics = common.evaluate_on_test(results, X_test_pooled, y_test)
+
+    attn_test_preds = test_pooler.predict(test_chunk_embeddings)
+    attn_test_metric = {
+        'name': 'AttentionNet',
+        'MAE': mean_absolute_error(y_test, attn_test_preds),
+        'RMSE': np.sqrt(mean_squared_error(y_test, attn_test_preds)),
+        'Pearson': common.pearson_corr(y_test, attn_test_preds),
+        'preds': attn_test_preds,
+    }
+    print(f"{attn_test_metric['name']:<14} | {attn_test_metric['MAE']:<8.4f} | "
+          f"{attn_test_metric['RMSE']:<8.4f} | {attn_test_metric['Pearson']:<10.4f}")
+    test_metrics.append(attn_test_metric)
+
+    best_test = min(test_metrics, key=common.model_score_for_picking)
+    print(f"\nGenerating test-set prediction visualization for best model "
+          f"({best_test['name']})...")
+    common.plot_predictions(
+        y_test,
+        best_test['preds'],
+        best_test['name'],
+        common.media_path('full_deep_learning_best_model_test_predictions.png')
+    )
+
+    print(f"\nGenerating out-of-fold prediction visualization for best model "
+          f"({best_result['name']})...")
     if best_result.get('oof_preds') is not None:
         oof_preds = best_result['oof_preds']
     else:
-        X_pooled = StandardScaler().fit_transform(
-            attention_pool_oof(all_chunk_embeddings, y_train_dev))
+        X_pooled = attention_pool_oof(all_chunk_embeddings, y_train_dev)
         oof_preds = common.out_of_fold_predictions(best_result['model'], X_pooled, y_train_dev)
     common.plot_predictions(
         y_train_dev,

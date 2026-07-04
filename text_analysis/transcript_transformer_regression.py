@@ -21,7 +21,12 @@ def main():
     dev_ids, dev_texts, dev_labels = common.load_data(
         os.path.join(common.LABELS_DIR, 'dev_split.csv'))
 
-    print(f"Loaded {len(train_texts)} train transcripts, {len(dev_texts)} dev transcripts.")
+    print("Loading test data...")
+    test_ids, test_texts, test_labels = common.load_data(
+        os.path.join(common.LABELS_DIR, 'test_split.csv'))
+
+    print(f"Loaded {len(train_texts)} train transcripts, {len(dev_texts)} dev transcripts, "
+          f"{len(test_texts)} test transcripts.")
 
     print("Loading SentenceTransformer model (all-mpnet-base-v2)...")
     embedder = SentenceTransformer('all-mpnet-base-v2')
@@ -32,16 +37,19 @@ def main():
     print("Encoding dev texts (chunked over the full transcript)...")
     dev_embeddings = common.encode_long_texts(embedder, dev_texts, CHUNK_WORDS, CHUNK_OVERLAP)
 
+    print("Encoding test texts (chunked over the full transcript)...")
+    test_embeddings = common.encode_long_texts(embedder, test_texts, CHUNK_WORDS, CHUNK_OVERLAP)
+
     X_train_dev = np.vstack([train_embeddings, dev_embeddings])
     y_train_dev = np.concatenate([train_labels, dev_labels])
 
-    scaler = StandardScaler()
-    X_train_dev_scaled = scaler.fit_transform(X_train_dev)
-
     common.run_regression_pipeline(
-        X_train_dev_scaled,
+        X_train_dev,
         y_train_dev,
         common.media_path('transformer_best_model_predictions.png'),
+        X_test=test_embeddings,
+        y_test=test_labels,
+        scaler=StandardScaler(),
         models=common.default_models(bayesian_needs_dense=True),
     )
 

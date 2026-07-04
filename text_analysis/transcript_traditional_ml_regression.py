@@ -98,7 +98,6 @@ def main():
     print(f"Loaded {len(train_texts)} train transcripts, {len(dev_texts)} dev transcripts, "
           f"{len(test_texts)} test transcripts.")
 
-    # Combine train and dev for cross-validation
     X_train_dev_texts = train_texts + dev_texts
     y_train_dev = np.concatenate([train_labels, dev_labels])
 
@@ -133,26 +132,11 @@ def main():
     best_model_info = min(results_for_picking, key=common.model_score_for_picking)
     print(f"\n>>> Best Model Picked: {best_model_info['name']} <<<")
 
-    # print("\n--- FINAL SUMMARY OF THE BEST MODEL ON TEST ---")
-    # print("=" * 50)
-    # best_name = best_model_info['name']
-    # best_model = best_model_info['model']
-    # X_test_for_pred = X_test_features.toarray() if best_model_info.get('needs_dense', False) and hasattr(X_test_features, 'toarray') else X_test_features
-    # test_preds = best_model.predict(X_test_for_pred)
-    # t_mae = mean_absolute_error(test_labels, test_preds)
-    # t_rmse = np.sqrt(mean_squared_error(test_labels, test_preds))
-    # t_pearson = common.pearson_scorer(test_labels, test_preds)
-    # print(f"{best_name} | {best_model_info['params']}")
-    # print(f"MAE: {t_mae:.4f} | RMSE: {t_rmse:.4f} | Pearson: {t_pearson:.4f}")
-    # print("=" * 50)
-    #
-    # # Plot predictions of the best model (on the original PHQ scale by adding back the mean).
-    # common.plot_predictions(
-    #     test_labels,
-    #     test_preds,
-    #     best_name,
-    #     common.media_path('tfidf_best_model_predictions.png')
-    # )
+    common.evaluate_on_test(
+        results_for_picking, X_test_features, np.array(test_labels),
+        name_width=18,
+        plot_out_path=common.media_path('tfidf_best_model_test_predictions.png'),
+        best_name=best_model_info['name'])
 
     print("\n--- Interpretability Visualizations ---")
     feature_names = vectorizer.get_feature_names_out()

@@ -53,7 +53,12 @@ def main():
     dev_ids, dev_texts, dev_labels = common.load_data(
         os.path.join(common.LABELS_DIR, 'dev_split.csv'))
 
-    print(f"Loaded {len(train_texts)} train transcripts, {len(dev_texts)} dev transcripts.")
+    print("Loading test data...")
+    test_ids, test_texts, test_labels = common.load_data(
+        os.path.join(common.LABELS_DIR, 'test_split.csv'))
+
+    print(f"Loaded {len(train_texts)} train transcripts, {len(dev_texts)} dev transcripts, "
+          f"{len(test_texts)} test transcripts.")
 
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     print(f"Loading emotion model '{EMOTION_MODEL}' on {device}...")
@@ -69,16 +74,19 @@ def main():
     print("Encoding dev texts (chunked over the full transcript)...")
     dev_features = encode_long_texts(tokenizer, model, device, dev_texts)
 
+    print("Encoding test texts (chunked over the full transcript)...")
+    test_features = encode_long_texts(tokenizer, model, device, test_texts)
+
     X_train_dev = np.vstack([train_features, dev_features])
     y_train_dev = np.concatenate([train_labels, dev_labels])
 
-    scaler = StandardScaler()
-    X_train_dev_scaled = scaler.fit_transform(X_train_dev)
-
     common.run_regression_pipeline(
-        X_train_dev_scaled,
+        X_train_dev,
         y_train_dev,
         common.media_path('emotion_best_model_predictions.png'),
+        X_test=test_features,
+        y_test=test_labels,
+        scaler=StandardScaler(),
         summary_title='Cross-Validation Summary (Emotion features)',
         label_fn=lambda name: f"Emotion + {name}",
         plot_color='darkorange',
