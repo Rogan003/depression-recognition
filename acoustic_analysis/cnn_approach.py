@@ -101,7 +101,7 @@ def main(window_size=10, hop_length=5):
     torch.manual_seed(42)
     np.random.seed(42)
 
-    device = torch.device("mps")
+    device = torch.device("cpu") # mps?
 
     train_dataset = AudioDataset("../dataset/wwwedaic/labels/train_split.csv", window_size, hop_length)
     val_dataset = AudioDataset("../dataset/wwwedaic/labels/dev_split.csv", window_size, hop_length)
@@ -149,7 +149,7 @@ def main(window_size=10, hop_length=5):
                 total_loss += loss.item() * batch_x.size(0)
             avg_loss = total_loss / len(train_loader.dataset)
             scheduler.step(avg_loss)
-            # print(f"Epoch {epoch+1}/{epochs}, Loss: {avg_loss:.4f}")
+            print(f"Epoch {epoch+1}/{epochs}, Loss: {avg_loss:.4f}")
 
         print("Evaluating fold...")
         model.eval()

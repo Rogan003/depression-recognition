@@ -16,10 +16,10 @@ import warnings
 warnings.filterwarnings("ignore")
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
-def extract_audeering_features(file_path, feature_extractor, model, device):
+def extract_hubert_features(file_path, feature_extractor, model, device):
     """
-    Loads audio, normalizes it, and processes it in windows through Audeering's
-    emotion model to extract average hidden states.
+    Loads audio, normalizes it, and processes it in windows through HuBERT
+    to extract average hidden states.
     """
     sr = 16000
     try:
@@ -30,12 +30,12 @@ def extract_audeering_features(file_path, feature_extractor, model, device):
         
     if len(audio) == 0:
         return None
-
+        
     audio = audio / (np.max(np.abs(audio)) + 1e-8)
     
     # 15s windows, 7.5s hop length
-    win_length = int(5 * sr)
-    hop_length = int(3 * sr)
+    win_length = int(15 * sr)
+    hop_length = int(7.5 * sr)
     
     embs = []
     model.eval()
@@ -81,9 +81,9 @@ def load_data(csv_path, feature_extractor, model, device, model_name, max_sample
     X = []
     y = []
 
-    # Hyperparams used in extraction (from extract_audeering_features)
-    win_length_s = 5.0
-    hop_length_s = 3.0
+    # Hyperparams used in extraction (from extract_hubert_features)
+    win_length_s = 15.0
+    hop_length_s = 7.5
     
     # Create cache directory based on model name
     safe_model_name = model_name.replace("/", "_")
@@ -111,7 +111,7 @@ def load_data(csv_path, feature_extractor, model, device, model_name, max_sample
             count += 1
         elif os.path.exists(file_path):
             print(f"Processing {file_path}...")
-            features = extract_audeering_features(file_path, feature_extractor, model, device)
+            features = extract_hubert_features(file_path, feature_extractor, model, device)
             if features is not None:
                 np.save(cache_file, features)
                 X.append(features)
@@ -129,7 +129,7 @@ def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "mps" if torch.backends.mps.is_available() else "cpu")
     print(f"Using device: {device}")
     
-    model_name = "audeering/wav2vec2-large-robust-12-ft-emotion-msp-dim"
+    model_name = "facebook/hubert-base-ls960"
     print(f"Loading {model_name}...")
     feature_extractor = AutoFeatureExtractor.from_pretrained(model_name)
     model = AutoModel.from_pretrained(model_name).to(device)
@@ -187,7 +187,7 @@ def main():
     else:
         pearson_corr = 0.0
     
-    print(f"\nAudeering Emotion + SVR Evaluation Results:")
+    print(f"\nHuBERT + SVR Evaluation Results:")
     print(f"MAE: {mae:.4f}")
     print(f"RMSE: {rmse:.4f}")
     print(f"Pearson correlation: {pearson_corr:.4f}")
@@ -219,7 +219,7 @@ def main():
     else:
         pearson_corr_enet = 0.0
         
-    print(f"\nAudeering Emotion + ElasticNet Evaluation Results:")
+    print(f"\nHuBERT + ElasticNet Evaluation Results:")
     print(f"MAE: {mae_enet:.4f}")
     print(f"RMSE: {rmse_enet:.4f}")
     print(f"Pearson correlation: {pearson_corr_enet:.4f}")

@@ -1,3 +1,4 @@
+import contextlib
 import importlib.util
 import os
 
@@ -31,7 +32,78 @@ common.suppress_expected_warnings()
 WIN_LENGTH_S = 30.0
 HOP_LENGTH_S = 20.0
 
-DEVICE = 'cpu'
+# How many 30s windows to push through the transformer at once. Long
+# interviews produce dozens of windows; forwarding all of them in a single
+# padded batch spikes memory and triggers swapping (which is the main reason
+# extraction feels "way too slow"). Mini-batching bounds the memory and keeps
+# the GPU/CPU pipeline busy. Keep this modest on Apple-Silicon (MPS), where the
+# GPU shares system RAM and a too-large batch trips the memory upper limit; the
+# forward loop shrinks it further automatically if an OOM still occurs.
+FEATURE_BATCH_SIZE = 4
+
+
+def _select_device():
+    if torch.cuda.is_available():
+        return 'cuda'
+    mps = getattr(torch.backends, 'mps', None)
+    if mps is not None and mps.is_available():
+        return 'mps'
+    return 'cpu'
+
+
+DEVICE = _select_device()
+
+# Make CPU inference use every available core.
+try:
+    torch.set_num_threads(os.cpu_count() or 1)
+except Exception:
+    pass
+
+
+def _empty_device_cache():
+    """Release cached accelerator memory between batches so long files don't
+    accumulate allocations and trip the MPS/CUDA upper limit."""
+    try:
+        if DEVICE == 'mps':
+            mps = getattr(torch, 'mps', None)
+            if mps is not None and hasattr(mps, 'empty_cache'):
+                mps.empty_cache()
+        elif DEVICE == 'cuda':
+            torch.cuda.empty_cache()
+    except Exception:
+        pass
+
+
+def _is_oom_error(err):
+    msg = str(err).lower()
+    return 'out of memory' in msg or 'mps backend out of memory' in msg
+
+
+def _autocast_ctx():
+    """Enable mixed precision (float16) on GPU/MPS. This is the single biggest
+    win over the plain fp32 path: the wav2vec2 transformer runs ~2x faster and
+    uses roughly half the memory, which is exactly what makes the wavlm approach
+    feel much snappier. On CPU it is a no-op."""
+    if DEVICE in ('cuda', 'mps'):
+        return torch.autocast(device_type=DEVICE, dtype=torch.float16)
+    return contextlib.nullcontext()
+
+
+def _pool_frames(out):
+    """Reduce a batch of frame-level hidden states (batch, time, hidden) to one
+    fixed-size embedding per window (batch, 2*hidden) by concatenating the mean
+    and std over the time axis.
+
+    This is the memory-critical step: instead of keeping every frame (a long
+    interview is dozens of 30s windows x ~1500 frames x 768 dims, hundreds of MB
+    per file), we collapse each window to a compact vector immediately. Only
+    these per-window embeddings are ever returned and cached, so both the cache
+    on disk and the RAM footprint shrink by ~1500x. mean+std keeps the most
+    important information (level and variability of the activations) that the
+    downstream attention-pooling / model zoo actually use."""
+    mean_emb = out.mean(dim=1)
+    std_emb = out.std(dim=1)
+    return torch.cat([mean_emb, std_emb], dim=-1)
 
 
 def extract_wav2vec2_features(file_path, feature_extractor, model):
@@ -53,16 +125,53 @@ def extract_wav2vec2_features(file_path, feature_extractor, model):
     if len(windows) == 0:
         windows = [audio]
 
+    device = next(model.parameters()).device
+
     model.eval()
     with torch.inference_mode():
+        # All windows share the same length, so no padding is needed; extract
+        # once, then forward the transformer in memory-bounded mini-batches.
         inputs = feature_extractor(
             windows,
             sampling_rate=16000,
             return_tensors="pt",
             padding=True
         )
-        outputs = model(**inputs)
-        return outputs.last_hidden_state
+        input_values = inputs["input_values"]
+        attention_mask = inputs.get("attention_mask", None)
+
+        chunks = []
+        start = 0
+        batch_size = FEATURE_BATCH_SIZE
+        while start < input_values.shape[0]:
+            end = start + batch_size
+            batch = {"input_values": input_values[start:end].to(device)}
+            if attention_mask is not None:
+                batch["attention_mask"] = attention_mask[start:end].to(device)
+            try:
+                with _autocast_ctx():
+                    out = model(**batch).last_hidden_state
+                # Collapse frames -> one compact embedding per window right away
+                # so we never hold (or cache) the full frame-level tensor. Cast
+                # back to fp32 so the cached .npy stays a plain float array.
+                pooled = _pool_frames(out).float().to("cpu")
+                chunks.append(pooled)
+                del out, pooled, batch
+            except RuntimeError as e:
+                # On an accelerator OOM, free the cache and retry this slice
+                # with a smaller batch instead of crashing the whole run.
+                if _is_oom_error(e) and batch_size > 1:
+                    del batch
+                    _empty_device_cache()
+                    batch_size = max(1, batch_size // 2)
+                    print(f"  [oom] shrinking feature batch size to {batch_size} and retrying...")
+                    continue
+                raise
+            start = end
+            _empty_device_cache()
+
+        # (num_windows, 2 * hidden_dim) - the most important per-window features.
+        return torch.cat(chunks, dim=0)
 
 
 def load_data(csv_path, feature_extractor, model, model_name, max_samples=None):
@@ -85,7 +194,10 @@ def load_data(csv_path, feature_extractor, model, model_name, max_samples=None):
         score = row['PHQ_Score']
         file_path = f"../dataset/wwwedaic/data/{participant_id}_P/{participant_id}_AUDIO.wav"
 
-        cache_file = os.path.join(cache_dir, f"{participant_id}_{WIN_LENGTH_S}_{HOP_LENGTH_S}.npy")
+        # "pooled" marks the compact per-window-embedding cache (mean+std over
+        # frames) instead of the old full frame-level tensor, so old caches are
+        # not mistaken for the new memory-light format.
+        cache_file = os.path.join(cache_dir, f"{participant_id}_{WIN_LENGTH_S}_{HOP_LENGTH_S}_pooled.npy")
 
         if os.path.exists(cache_file):
             print(f"Loading cached features for {participant_id}...")
