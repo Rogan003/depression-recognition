@@ -12,7 +12,7 @@ from sklearn.ensemble import RandomForestRegressor, GradientBoostingRegressor
 from sklearn.linear_model import BayesianRidge, RidgeCV, ElasticNetCV
 from sklearn.metrics import make_scorer, mean_absolute_error, mean_squared_error
 from sklearn.model_selection import (
-    RandomizedSearchCV, cross_val_predict,
+    RandomizedSearchCV, cross_val_predict, cross_validate,
 )
 from sklearn.neural_network import MLPRegressor
 from sklearn.pipeline import Pipeline
@@ -352,6 +352,7 @@ def default_models(bayesian_needs_dense=False):
             "lambda_2": loguniform(1e-4, 1e-1),
         },
         "n_iter": 20,
+        "n_jobs": 1,
     }
     if bayesian_needs_dense:
         bayesian_cfg["needs_dense"] = True
@@ -364,11 +365,11 @@ def default_models(bayesian_needs_dense=False):
         },
         {
             "name": "ElasticNet",
-            "estimator": ElasticNetCV(max_iter=5000, random_state=42),
+            "estimator": ElasticNetCV(max_iter=100, random_state=42),
             "param_dist": {
                 "l1_ratio": uniform(0, 1),
             },
-            "n_iter": 1000,
+            "n_iter": 100,
         },
         {
             "name": "SVR",
@@ -379,7 +380,7 @@ def default_models(bayesian_needs_dense=False):
                 "gamma": ["scale", "auto", 0.1, 0.01],
                 "kernel": ["rbf", "linear", "poly"],
             },
-            "n_iter": 1000,
+            "n_iter": 100,
         },
         {
             "name": "RandomForest",
@@ -423,7 +424,33 @@ def run_random_search(model_cfg, X, y, scoring, scaler=None):
         X = X.toarray()
 
     estimator = clone(model_cfg["estimator"])
-    param_dist = model_cfg["param_dist"]
+    param_dist = model_cfg.get("param_dist")
+    n_jobs = model_cfg.get("n_jobs", -1)
+
+    if not param_dist:
+        if scaler is not None:
+            estimator = Pipeline([("scaler", clone(scaler)), ("model", estimator)])
+
+        cv_results = cross_validate(
+            estimator, X, y, cv=5, scoring=scoring, n_jobs=n_jobs)
+        cv_mae = -np.mean(cv_results["test_MAE"])
+        cv_rmse = -np.mean(cv_results["test_RMSE"])
+        cv_pearson = np.mean(cv_results["test_Pearson"])
+
+        estimator.fit(X, y)
+
+        print(f"CV MAE: {cv_mae:.4f}, RMSE: {cv_rmse:.4f}, Pearson: {cv_pearson:.4f}")
+
+        return {
+            "name": model_cfg["name"],
+            "MAE": cv_mae,
+            "RMSE": cv_rmse,
+            "Pearson": cv_pearson,
+            "model": estimator,
+            "params": {},
+            "needs_dense": model_cfg.get("needs_dense", False),
+        }
+
     if scaler is not None:
         estimator = Pipeline([("scaler", clone(scaler)), ("model", estimator)])
         param_dist = {f"model__{key}": value for key, value in param_dist.items()}
@@ -435,7 +462,7 @@ def run_random_search(model_cfg, X, y, scoring, scaler=None):
         cv=5,
         scoring=scoring,
         refit="MAE",
-        n_jobs=-1,
+        n_jobs=n_jobs,
         random_state=42,
     )
     search.fit(X, y)
