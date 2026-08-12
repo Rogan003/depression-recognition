@@ -1,0 +1,3 @@
+# Why are there <0 predictions?
+4. Add corpus interpretation (emotions model): mean emotion profile, emotion↔PHQ correlations, high vs. low PHQ comparison, and linear-model coefficients / permutation importance.
+Change how media (and ft_checkpoints) are formed, especially explore_data.py

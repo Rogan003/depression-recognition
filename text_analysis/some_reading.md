@@ -1,0 +1,12 @@
+https://stats.stackexchange.com/questions/627488/regression-with-text-data
+https://stackoverflow.com/questions/46566594/what-methodology-is-best-suited-for-regression-from-text-data
+https://medium.com/@joachimiak.krzysztof/featurizing-text-for-regression-part-i-scikit-learn-5b45cb6b7029
+https://www.reddit.com/r/AskStatistics/comments/13gt7j9/how_is_my_regression_model_handling_text/
+https://www.kaggle.com/code/modlee/text-regression
+https://ieeexplore.ieee.org/stamp/stamp.jsp?arnumber=10640097
+https://lajavaness.medium.com/regression-with-text-input-using-bert-and-transformers-71c155034b13
+https://scholar.google.com/scholar?hl=sr&as_sdt=0%2C5&q=regression+based+on+textual+attributes&btnG=
+https://scholar.google.com/scholar?hl=sr&as_sdt=0%2C5&q=predicting+depression+based+on+clinical+interviews&btnG=
+https://publikationen.reutlingen-university.de/frontdoor/deliver/index/docId/4916/file/4916.pdf
+https://www.mdpi.com/2076-3417/16/10/5018
+https://www.scienceopen.com/hosted-document?doi=10.57197/JDR-2025-0578
