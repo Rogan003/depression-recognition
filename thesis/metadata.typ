@@ -50,7 +50,7 @@
 // На енглеском уписати чланове на латиници
 #let komisija_predsednik_eng = "Petar Petrović"
 #let komisija_clan_eng = "Marko Marković"
-#let mentor_eng = "Igor Dejanović"
+#let mentor_eng = "Milan Segedinac"
 
 
 // Ово даље углавном не треба мењати.
